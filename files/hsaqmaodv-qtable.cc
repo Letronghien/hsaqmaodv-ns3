@@ -170,13 +170,27 @@ QTable::SelectGreedy (const saqmaodv::RoutingTableEntry& primary,
     int    bestIdx = -1;
     for (uint32_t i = 0; i < routes.size (); ++i)
     {
+        // Safety: skip entries with null Ptr<Ipv4Route> — can cause
+        // AggregateObject(ptr, 0) crash when packet is forwarded.
+        if (!routes[i].GetRoute ())
+        {
+            NS_LOG_DEBUG ("HSAQMAODV GREEDY: skip null-route entry nh="
+                          << routes[i].GetNextHop ());
+            continue;
+        }
         double q = GetQValue (dst, routes[i].GetNextHop ());
         NS_LOG_DEBUG ("HSAQMAODV GREEDY candidate: nh=" << routes[i].GetNextHop ()
                       << " Q=" << q);
         if (q > bestQ) { bestQ = q; bestIdx = static_cast<int> (i); }
     }
 
+    // Fall back to primary if no valid route found in Q-table
     out = (bestIdx >= 0) ? routes[static_cast<size_t> (bestIdx)] : primary;
+    if (bestIdx >= 0 && !out.GetRoute ())
+    {
+        NS_LOG_DEBUG ("HSAQMAODV GREEDY: best route has null Ptr<Ipv4Route>, using primary");
+        out = primary;
+    }
     NS_LOG_DEBUG ("HSAQMAODV GREEDY selected: nh=" << out.GetNextHop ()
                   << " Q=" << bestQ);
     return true;
