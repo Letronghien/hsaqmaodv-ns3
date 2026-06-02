@@ -1,186 +1,192 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /**
- * H-SAQMAODV: Topology-Aware Hybrid Self-Adaptive Q-Table.
+ * \file hsaqmaodv-qtable.h
+ * \brief H-SAQMAODV Hybrid Q-Table: Topology-Aware 3-Mode Switching
+ *        with Smooth Energy-Aware Reward Weighting.
  *
- * Extends SA-QMAODV QTable with THREE-MODE Q-SWITCHING based on
- * Topology Volatility Indicator (TVI = ΔSeq rate).
+ * ══════════════════════════════════════════════════════════════════════════
+ * DESIGN OVERVIEW  (for paper / report reference)
+ * ══════════════════════════════════════════════════════════════════════════
  *
- * New behaviour in SelectEpsilonGreedy():
+ * SAQMAODV (base) provides three adaptive mechanisms (§4.2–§4.4):
+ *   (1) Adaptive ε : bump on RERR (+0.20), periodic decay (−0.02)
+ *   (2) Adaptive α : α_t = 0.1 + 0.8·(1 − exp(−λ·ΔSeq))
+ *   (3) Adaptive reward weights: hard-threshold flip at E_res < 20%
  *
- *   TVI > m_tviHigh  → MODE_BYPASS:  return primary route directly
- *                       (network too chaotic, skip Q-learning)
- *   TVI < m_tviLow   → MODE_GREEDY:  select best Q-value (ε = 0)
- *                       (network stable, Q has converged)
- *   otherwise         → MODE_EXPLORE: standard ε-greedy (same as SAQMAODV)
+ * H-SAQMAODV (this class) extends SAQMAODV with TWO new contributions:
  *
- * All SA adaptive mechanisms (ε decay, α recompute, reward weights) run
- * unchanged in the background — they help MODE_EXPLORE accuracy and smooth
- * mode transitions.
+ * ── Contribution 1: Topology Volatility Indicator (TVI) ─────────────────
  *
- * Paper: "H-SAQMAODV: A Topology-Aware Hybrid Q-Learning Routing Protocol
- *         for Energy-Heterogeneous FANETs"
- * Inspired by: HQA (ScienceDirect 2025) — Bayesian stability evaluator
+ *   TVI = ΔSeq_count / seqNoWindow_seconds                    (Eq. H.1)
+ *
+ *   where ΔSeq_count = number of destination sequence-number updates
+ *   observed within the last seqNoWindow seconds (reuses SA base class).
+ *   TVI measures how rapidly the topology is changing at the local node.
+ *
+ *   Three routing modes selected by TVI:
+ *
+ *     TVI > tviHigh  →  MODE_BYPASS :
+ *         Topology too dynamic for Q-learning to be reliable.
+ *         Return primary route directly (AODV-like reactive behaviour).
+ *         Effect: suppresses exploration overhead in volatile conditions,
+ *         directly addressing the high-variance / low-density phenomenon
+ *         observed in SA-QMAODV (reviewer comment §3.1).
+ *
+ *     TVI < tviLow   →  MODE_GREEDY :
+ *         Topology stable; Q-values have converged.
+ *         Return the route with the highest Q-value (ε forced to 0).
+ *         Effect: maximises exploitation when learning is reliable.
+ *
+ *     tviLow ≤ TVI ≤ tviHigh  →  MODE_EXPLORE :
+ *         Standard ε-greedy from SA-QMAODV (default behaviour).
+ *
+ *   Default thresholds:  tviHigh = 3.0,  tviLow = 1.0
+ *   (sensitivity analysis: see PAPER-NOTES.md §5)
+ *
+ * ── Contribution 2: Smooth Energy-Aware Reward Weighting ────────────────
+ *
+ *   SAQMAODV uses a HARD threshold: if E_res < 20% flip weights instantly.
+ *   This causes abrupt routing instability when energy oscillates near 20%
+ *   (reviewer comment §3.4 — "prevent abrupt routing instability").
+ *
+ *   H-SAQMAODV replaces the hard flip with a SIGMOID-SMOOTH transition:
+ *
+ *     s(E) = 1 / (1 + exp( (E − θ) / σ ))                   (Eq. H.2)
+ *
+ *     w3(E) = w3_lo + (w3_hi − w3_lo) · s(E)               (Eq. H.3)
+ *     w2(E) = w2_hi · (1 − s(E))                            (Eq. H.4)
+ *     w1(E) = 1 − w2(E) − w3(E)          [normalised]       (Eq. H.5)
+ *
+ *   where:
+ *     θ = 0.30  (sigmoid centre — soft energy threshold)
+ *     σ = 0.08  (sigmoid steepness — controls transition width)
+ *     hi = high-energy (normal) mode target weights: w1=0.50, w2=0.40, w3=0.10
+ *     lo = low-energy mode target weights          : w1=0.10, w2=0.10, w3=0.80
+ *
+ *   Properties:
+ *     E = 1.0 (full)  : s ≈ 0  → weights ≈ (0.50, 0.40, 0.10)  [normal]
+ *     E = θ  = 0.30   : s = 0.5 → weights smoothly interpolated
+ *     E = 0.0 (dead)  : s ≈ 1  → weights ≈ (0.10, 0.10, 0.80)  [low-E]
+ *     Monotone, C∞ continuous — no flip, no hysteresis instability.
+ *
+ * ══════════════════════════════════════════════════════════════════════════
+ * NS-3 Integration steps:
+ *   1. Copy hsaqmaodv-qtable.{h,cc} beside saqmaodv-qtable.{h,cc}
+ *   2. In routing protocol .h : add  hsaqmaodv::QTable  m_hqtable
+ *   3. In routing protocol .cc Start():
+ *        m_hqtable.SetTVIThresholds(tviHigh, tviLow);
+ *        m_hqtable.SetSigmoidParams(theta, sigma);
+ *   4. Replace SelectEpsilonGreedy()          → SelectHybridRoute()
+ *   5. Replace RecomputeAdaptiveRewardWeights → RecomputeSmoothEnergyWeights
+ * ══════════════════════════════════════════════════════════════════════════
  */
 
 #ifndef HSAQMAODV_QTABLE_H
 #define HSAQMAODV_QTABLE_H
 
-#include "saqmaodv-rtable.h"
-
-#include "ns3/ipv4-address.h"
+#include "saqmaodv-qtable.h"
 #include "ns3/nstime.h"
-#include "ns3/random-variable-stream.h"
+#include <string>
 
-#include <map>
-#include <vector>
-#include <deque>
+namespace ns3 {
+namespace hsaqmaodv {
 
-namespace ns3
+// ── Topology mode ─────────────────────────────────────────────────────────────
+/** Routing mode chosen by TVI. */
+enum TopologyMode
 {
-namespace hsaqmaodv
-{
-
-/// Routing mode selected by Topology-Aware Q-Switching.
-enum QSwitchMode
-{
-    MODE_BYPASS  = 0,   ///< TVI > tviHigh: skip Q, use primary route
-    MODE_GREEDY  = 1,   ///< TVI < tviLow:  pure greedy (ε=0)
-    MODE_EXPLORE = 2,   ///< normal ε-greedy (SA-QMAODV default)
+    MODE_BYPASS  = 0, ///< TVI > tviHigh : skip Q-table, AODV-like
+    MODE_EXPLORE = 1, ///< tviLow ≤ TVI ≤ tviHigh : epsilon-greedy (SA default)
+    MODE_GREEDY  = 2, ///< TVI < tviLow  : exploit best Q-value (ε = 0)
 };
 
-/// One Q-learning record per (destination, next-hop) pair.
-struct QRecord
-{
-    RoutingTableEntry rt;
-    double            qValue;
-    uint32_t          txCount;
-    uint32_t          ackCount;
-    Time              lastUpd;
-
-    QRecord() : qValue(0.0), txCount(0), ackCount(0), lastUpd(Seconds(0)) {}
-    QRecord(const RoutingTableEntry& e, double q)
-        : rt(e), qValue(q), txCount(0), ackCount(0), lastUpd(Seconds(0)) {}
-};
-
+// ─────────────────────────────────────────────────────────────────────────────
 /**
- * \brief H-SAQMAODV Hybrid Self-Adaptive Q-Table.
+ * \brief H-SAQMAODV Hybrid QTable.
  *
- * Drop-in replacement for saqmaodv::QTable with added topology-aware switching.
+ * Inherits all of saqmaodv::QTable and adds:
+ *   - TVI-based 3-mode hybrid route selection   (Contribution 1)
+ *   - Sigmoid smooth energy-aware weighting     (Contribution 2)
  */
-class QTable
+class QTable : public saqmaodv::QTable
 {
   public:
-    QTable(uint32_t maxPaths = 3);
-
-    void SetMaxPaths(uint32_t mp);
-    uint32_t GetMaxPaths() const;
-
-    // -------- Inherited SA hyper-parameter setters --------------------------
-    void SetLearningParameters(double alpha0, double gamma, double epsilon0);
-    void SetRewardWeights(double w1, double w2, double w3 = 0.0);
-    void SetLowEnergyThreshold(double frac);
-    void SetSensitivityLambda(double lambda);
-    void SetSeqNoWindow(Time window);
-
-    // -------- NEW: Topology-Aware Q-Switching thresholds -------------------
     /**
-     * \brief Set TVI thresholds for mode switching.
-     * \param tviHigh  ΔSeq count above which MODE_BYPASS activates (default 8).
-     * \param tviLow   ΔSeq count below which MODE_GREEDY activates (default 1).
+     * \param maxPaths  Max alternate routes per destination (default 3).
+     * \param tviHigh   TVI threshold for MODE_BYPASS  (default 3.0).
+     * \param tviLow    TVI threshold for MODE_GREEDY  (default 1.0).
      */
-    void SetTVIThresholds(uint32_t tviHigh, uint32_t tviLow);
-    uint32_t GetTVIHigh() const { return m_tviHigh; }
-    uint32_t GetTVILow()  const { return m_tviLow; }
+    explicit QTable (uint32_t maxPaths = 3,
+                     double   tviHigh  = 3.0,
+                     double   tviLow   = 1.0);
 
-    // -------- SA adaptive controller (unchanged from SAQMAODV) -------------
-    void OnRouteError();
-    void PeriodicEpsilonDecay();
-    void RecordSeqNoUpdate();
-    void RecomputeAdaptiveAlpha();
-    void RecomputeAdaptiveRewardWeights(double energyFraction);
+    // ── TVI configuration (Contribution 1) ───────────────────────────────────
+    void   SetTVIThresholds (double tviHigh, double tviLow);
+    double GetTVIHigh ()     const { return m_tviHigh; }
+    double GetTVILow  ()     const { return m_tviLow;  }
 
-    // -------- Read accessors -----------------------------------------------
-    double   GetAlpha()    const { return m_alpha; }
-    double   GetGamma()    const { return m_gamma; }
-    double   GetEpsilon()  const { return m_epsilon; }
-    double   GetW1()       const { return m_w1; }
-    double   GetW2()       const { return m_w2; }
-    double   GetW3()       const { return m_w3; }
-    uint32_t GetDeltaSeq() const;
-    QSwitchMode GetCurrentMode() const { return m_lastMode; }
-    /// Counters for paper Fig 6 (mode distribution)
-    uint64_t GetBypassCount()  const { return m_bypassCount; }
-    uint64_t GetGreedyCount()  const { return m_greedyCount; }
-    uint64_t GetExploreCount() const { return m_exploreCount; }
+    // ── Runtime mode / TVI queries ────────────────────────────────────────────
+    TopologyMode GetCurrentMode () const; ///< O(1) mode decision
+    std::string  GetModeName    () const; ///< "BYPASS"|"EXPLORE"|"GREEDY"
+    double       GetTVI         () const; ///< Raw TVI value (Eq. H.1)
 
-    // -------- Standard Q-table operations (same as SAQMAODV) ---------------
-    bool     AddRoute(const RoutingTableEntry& rt);
-    void     ReinitQValues(Ipv4Address dst);
-    uint32_t GetRoutes(Ipv4Address dst,
-                       std::vector<RoutingTableEntry>& routes,
-                       const RoutingTable* mainTable = nullptr) const;
-
+    // ── 3-mode route selection — replaces SelectEpsilonGreedy ────────────────
     /**
-     * \brief Route selection with THREE-MODE switching.
+     * \brief Topology-aware hybrid route selection.
      *
-     * Core contribution of H-SAQMAODV:
-     *   - Evaluates TVI = GetDeltaSeq()
-     *   - Selects MODE_BYPASS / MODE_GREEDY / MODE_EXPLORE accordingly
+     *   MODE_BYPASS  → out = primary  (no Q-table access)
+     *   MODE_GREEDY  → out = argmax_Q for primary's destination
+     *   MODE_EXPLORE → saqmaodv::QTable::SelectEpsilonGreedy()
+     *
+     * \return true if out was set; false only if Q-table is empty and
+     *         mode is GREEDY (falls back to primary in that case).
      */
-    bool SelectEpsilonGreedy(const RoutingTableEntry& primary,
-                             RoutingTableEntry& out,
-                             const RoutingTable* mainTable = nullptr);
+    bool SelectHybridRoute (const saqmaodv::RoutingTableEntry& primary,
+                            saqmaodv::RoutingTableEntry&       out,
+                            const saqmaodv::RoutingTable*      mainTable = nullptr);
 
-    void UpdateQValue(Ipv4Address dst, Ipv4Address nextHop,
-                      double ackSuccess, double delaySec,
-                      double energyFraction = 1.0);
-    bool EnsureRecord(const RoutingTableEntry& rt);
-    void UpdateQValueOrCreate(const RoutingTableEntry& rt,
-                              double ackSuccess, double delaySec,
-                              double energyFraction = 1.0);
+    // ── Smooth energy weighting — replaces RecomputeAdaptiveRewardWeights ────
+    /**
+     * \brief Recompute reward weights using sigmoid function (Eq. H.2–H.5).
+     *
+     * Replaces saqmaodv::QTable::RecomputeAdaptiveRewardWeights().
+     *
+     * \param energyFraction  Node residual energy in [0, 1].
+     */
+    void RecomputeSmoothEnergyWeights (double energyFraction);
 
-    void     DeleteRoutes(Ipv4Address dst);
-    void     DeleteRoute(Ipv4Address dst, Ipv4Address nextHop);
-    void     RemoveNextHopGlobally(Ipv4Address nextHop);
-    uint32_t Size() const;
-    uint32_t CountFor(Ipv4Address dst) const;
-    bool     IsFull(Ipv4Address dst) const;
-    void     Clear();
-    void     Print(std::ostream& os) const;
-    double   GetQValue(Ipv4Address dst, Ipv4Address nextHop) const;
+    /**
+     * \brief Configure sigmoid parameters (Eq. H.2).
+     * \param theta  Centre of sigmoid (default 0.30).
+     * \param sigma  Steepness / width  (default 0.08).
+     */
+    void SetSigmoidParams (double theta, double sigma);
+
+    double GetSigmoidTheta () const { return m_sigmaTheta; }
+    double GetSigmoidSigma () const { return m_sigmaSigma; }
+
+    /**
+     * \brief Public sigmoid evaluation — useful for unit tests and logging.
+     * \return s(E) ∈ (0,1)  from Eq. H.2.
+     */
+    double SigmoidActivation (double energyFraction) const;
 
   private:
-    std::vector<QRecord>::iterator FindWorst(std::vector<QRecord>& vec);
-    std::vector<QRecord> BuildCandidates(const RoutingTableEntry& primary,
-                                         const RoutingTable* mainTable) const;
-    double ComputeReward(double ackSuccess, double delaySec, double energyFrac) const;
-    void   PurgeSeqNoEvents();
+    // ── TVI thresholds ────────────────────────────────────────────────────────
+    double m_tviHigh; ///< Default 3.0
+    double m_tviLow;  ///< Default 1.0
 
-    // Q-table storage
-    std::map<Ipv4Address, std::vector<QRecord>> m_records;
-    uint32_t m_maxPaths;
+    // ── Sigmoid parameters ────────────────────────────────────────────────────
+    double m_sigmaTheta; ///< θ = 0.30 (soft energy threshold)
+    double m_sigmaSigma; ///< σ = 0.08 (transition width)
 
-    // SA adaptive state (unchanged)
-    double m_alpha, m_gamma, m_epsilon;
-    double m_w1, m_w2, m_w3;
-    bool   m_lowEnergyMode;
-    double m_epsilonMin, m_epsilonMax, m_epsilonStep, m_epsilonBump;
-    double m_lambda;
-    Time   m_seqNoWindow;
-    double m_lowEnergyThresh;
-    double m_w1Normal, m_w2Normal, m_w3Normal;
-    double m_w1Low, m_w2Low, m_w3Low;
-    mutable std::deque<Time> m_seqEvents;
+    // ── Private helpers ───────────────────────────────────────────────────────
+    bool SelectGreedy (const saqmaodv::RoutingTableEntry& primary,
+                       saqmaodv::RoutingTableEntry&       out,
+                       const saqmaodv::RoutingTable*      mainTable) const;
 
-    // NEW: Topology-Aware Q-Switching state
-    uint32_t    m_tviHigh;      ///< ΔSeq threshold → MODE_BYPASS  (default 8)
-    uint32_t    m_tviLow;       ///< ΔSeq threshold → MODE_GREEDY  (default 1)
-    QSwitchMode m_lastMode;     ///< Mode used in last SelectEpsilonGreedy call
-    uint64_t    m_bypassCount;  ///< Total MODE_BYPASS selections
-    uint64_t    m_greedyCount;  ///< Total MODE_GREEDY selections
-    uint64_t    m_exploreCount; ///< Total MODE_EXPLORE selections
-
-    Ptr<UniformRandomVariable> m_uniform;
+    /// seqNoWindow length in seconds (fixed at 5.0 per paper §4.3).
+    static constexpr double kSeqNoWindowSec = 5.0;
 };
 
 } // namespace hsaqmaodv

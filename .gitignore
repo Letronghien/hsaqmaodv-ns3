@@ -1,0 +1,39 @@
+# NS-3 build artifacts
+build/
+cmake-cache/
+*.o
+*.so
+*.a
+ns3.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local results (regenerable)
+results-*/
+figures-reproduced/
+*.tar.gz
+
+# Backup files
+*.bak
+*.bak-*
+*.before-*
+
+# Scratch / temp
+data/
+figures/
+files/test_hsaq.txt
+scripts/patches/test.txt
+bootstrap-hsaqmaodv.py
