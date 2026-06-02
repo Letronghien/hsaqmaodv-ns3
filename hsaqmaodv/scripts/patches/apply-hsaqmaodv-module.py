@@ -111,9 +111,8 @@ for fname in ['hsaqmaodv-qtable.h', 'hsaqmaodv-qtable.cc']:
 
 # ─── Step 4: Patch namespace / includes in all copied files ──────────────────
 def patch_namespace(path: Path):
-    """Rename saqmaodv→hsaqmaodv in namespace declarations and includes,
-    but preserve the saqmaodv:: type references in hsaqmaodv-qtable.{h,cc}
-    (those files deliberately reference saqmaodv:: base types)."""
+    """Rename saqmaodv→hsaqmaodv in namespace declarations, includes,
+    and class names. Skips hsaqmaodv-qtable files (manage their own refs)."""
     text = path.read_text(encoding='utf-8')
 
     # Skip the H-SAQMAODV qtable files: they manage their own namespaces
@@ -123,14 +122,18 @@ def patch_namespace(path: Path):
     # Rename namespace block declarations
     text = text.replace('namespace saqmaodv\n', 'namespace hsaqmaodv\n')
     text = text.replace('namespace saqmaodv {', 'namespace hsaqmaodv {')
-    # Rename fully-qualified references (only those NOT in qtable include)
+    # Rename fully-qualified ns3::saqmaodv:: references
     text = re.sub(r'\bns3::saqmaodv::', 'ns3::hsaqmaodv::', text)
     # Rename include guards
     text = text.replace('SAQMAODV_', 'HSAQMAODV_')
-    # Rename includes (except saqmaodv-qtable.h → that stays as hsaqmaodv-qtable.h)
+    # Rename includes
     text = re.sub(r'#include "saqmaodv-qtable\.h"',
                   '#include "hsaqmaodv-qtable.h"', text)
     text = re.sub(r'#include "saqmaodv-', '#include "hsaqmaodv-', text)
+    # Rename class names (e.g. SaqmaodvHelper → HsaqmaodvHelper)
+    # Only in helper files to avoid breaking base-class references in protocol
+    if 'helper' in str(path):
+        text = text.replace('SaqmaodvHelper', 'HsaqmaodvHelper')
 
     path.write_text(text, encoding='utf-8')
 
