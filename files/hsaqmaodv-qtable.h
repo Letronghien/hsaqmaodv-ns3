@@ -113,17 +113,13 @@ class QTable : public saqmaodv::QTable
   public:
     /**
      * \param maxPaths  Max alternate routes per destination (default 3).
-     * \param tviHigh   TVI threshold for MODE_BYPASS  (default 3.0).
-     * \param tviLow    TVI threshold for MODE_GREEDY  (default 1.0).
+     * TVI thresholds and sigmoid params are static constexpr (see below).
      */
-    explicit QTable (uint32_t maxPaths = 3,
-                     double   tviHigh  = 3.0,
-                     double   tviLow   = 1.0);
+    explicit QTable (uint32_t maxPaths = 3);
 
     // ── TVI configuration (Contribution 1) ───────────────────────────────────
-    void   SetTVIThresholds (double tviHigh, double tviLow);
-    double GetTVIHigh ()     const { return m_tviHigh; }
-    double GetTVILow  ()     const { return m_tviLow;  }
+    static double GetTVIHigh () { return m_tviHigh; }
+    static double GetTVILow  () { return m_tviLow;  }
 
     // ── Runtime mode / TVI queries ────────────────────────────────────────────
     TopologyMode GetCurrentMode () const; ///< O(1) mode decision
@@ -155,15 +151,8 @@ class QTable : public saqmaodv::QTable
      */
     void RecomputeSmoothEnergyWeights (double energyFraction);
 
-    /**
-     * \brief Configure sigmoid parameters (Eq. H.2).
-     * \param theta  Centre of sigmoid (default 0.30).
-     * \param sigma  Steepness / width  (default 0.08).
-     */
-    void SetSigmoidParams (double theta, double sigma);
-
-    double GetSigmoidTheta () const { return m_sigmaTheta; }
-    double GetSigmoidSigma () const { return m_sigmaSigma; }
+    static double GetSigmoidTheta () { return m_sigmaTheta; }
+    static double GetSigmoidSigma () { return m_sigmaSigma; }
 
     /**
      * \brief Public sigmoid evaluation — useful for unit tests and logging.
@@ -172,13 +161,13 @@ class QTable : public saqmaodv::QTable
     double SigmoidActivation (double energyFraction) const;
 
   private:
-    // ── TVI thresholds ────────────────────────────────────────────────────────
-    double m_tviHigh; ///< Default 3.0
-    double m_tviLow;  ///< Default 1.0
-
-    // ── Sigmoid parameters ────────────────────────────────────────────────────
-    double m_sigmaTheta; ///< θ = 0.30 (soft energy threshold)
-    double m_sigmaSigma; ///< σ = 0.08 (transition width)
+    // ── TVI thresholds (static — no extra per-instance memory) ───────────────
+    // Using static constexpr avoids sizeof(hsaqmaodv::QTable) > sizeof(saqmaodv::QTable)
+    // which would corrupt routing protocol member layout (memory offset mismatch).
+    static constexpr double m_tviHigh   = 3.0;  ///< TVI → MODE_BYPASS
+    static constexpr double m_tviLow    = 1.0;  ///< TVI → MODE_GREEDY
+    static constexpr double m_sigmaTheta = 0.30; ///< θ sigmoid centre
+    static constexpr double m_sigmaSigma = 0.08; ///< σ sigmoid width
 
     // ── Private helpers ───────────────────────────────────────────────────────
     bool SelectGreedy (const saqmaodv::RoutingTableEntry& primary,

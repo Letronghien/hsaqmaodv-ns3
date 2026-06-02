@@ -3,12 +3,10 @@
  * \file hsaqmaodv-qtable.cc
  * \brief H-SAQMAODV Hybrid QTable — implementation.
  *
- * See hsaqmaodv-qtable.h for full design rationale and equations.
- *
- * Key changes vs. SAQMAODV base class:
- *   - SelectHybridRoute()            replaces SelectEpsilonGreedy()
- *   - RecomputeSmoothEnergyWeights() replaces RecomputeAdaptiveRewardWeights()
- *   - SigmoidActivation()            implements Eq. H.2
+ * Key design decision: all extra parameters (TVI thresholds, sigmoid params)
+ * are static constexpr in the header. This keeps sizeof(hsaqmaodv::QTable)
+ * equal to sizeof(saqmaodv::QTable), preventing memory layout mismatch in
+ * the routing protocol (which declares m_qtable as a VALUE member).
  */
 
 #include "hsaqmaodv-qtable.h"
@@ -28,44 +26,12 @@ NS_LOG_COMPONENT_DEFINE ("HsaqmaodvQTable");
 namespace hsaqmaodv {
 
 // ============================================================================
-// Constructor
+// Constructor — no extra member init needed (all params are static constexpr)
 // ============================================================================
 
-QTable::QTable (uint32_t maxPaths, double tviHigh, double tviLow)
-    : saqmaodv::QTable (maxPaths),
-      m_tviHigh    (tviHigh),
-      m_tviLow     (tviLow),
-      m_sigmaTheta (0.30),
-      m_sigmaSigma (0.08)
+QTable::QTable (uint32_t maxPaths)
+    : saqmaodv::QTable (maxPaths)
 {
-    NS_ASSERT_MSG (tviLow  > 0.0,      "tviLow must be > 0");
-    NS_ASSERT_MSG (tviHigh > tviLow,   "tviHigh must be > tviLow");
-    NS_ASSERT_MSG (m_sigmaSigma > 0.0, "sigma must be > 0");
-}
-
-// ============================================================================
-// TVI threshold configuration
-// ============================================================================
-
-void
-QTable::SetTVIThresholds (double tviHigh, double tviLow)
-{
-    NS_ASSERT_MSG (tviLow  > 0.0,    "tviLow must be > 0");
-    NS_ASSERT_MSG (tviHigh > tviLow, "tviHigh must be > tviLow");
-    m_tviHigh = tviHigh;
-    m_tviLow  = tviLow;
-}
-
-// ============================================================================
-// Sigmoid configuration (Contribution 2)
-// ============================================================================
-
-void
-QTable::SetSigmoidParams (double theta, double sigma)
-{
-    NS_ASSERT_MSG (sigma > 0.0, "sigma must be > 0");
-    m_sigmaTheta = theta;
-    m_sigmaSigma = sigma;
 }
 
 // ============================================================================
@@ -110,8 +76,6 @@ QTable::GetModeName () const
 double
 QTable::SigmoidActivation (double energyFraction) const
 {
-    // s(E) = 1 / (1 + exp( (E − θ) / σ ))
-    // As E drops below θ, s(E) → 1 (activates low-energy mode smoothly)
     double exponent = (energyFraction - m_sigmaTheta) / m_sigmaSigma;
     return 1.0 / (1.0 + std::exp (exponent));
 }
@@ -123,15 +87,13 @@ QTable::SigmoidActivation (double energyFraction) const
 void
 QTable::RecomputeSmoothEnergyWeights (double energyFraction)
 {
-    // Anchor weights from SA-QMAODV paper Table 1
-    constexpr double w1Hi = 0.50, w2Hi = 0.40, w3Hi = 0.10;
-    constexpr double                            w3Lo = 0.80;
+    constexpr double w2Hi = 0.40, w3Hi = 0.10;
+    constexpr double                w3Lo = 0.80;
 
-    double s  = SigmoidActivation (energyFraction); // Eq. H.2
-
-    double w3 = w3Hi + (w3Lo - w3Hi) * s;           // Eq. H.3
-    double w2 = w2Hi * (1.0 - s);                   // Eq. H.4
-    double w1 = 1.0 - w2 - w3;                      // Eq. H.5
+    double s  = SigmoidActivation (energyFraction);
+    double w3 = w3Hi + (w3Lo - w3Hi) * s;
+    double w2 = w2Hi * (1.0 - s);
+    double w1 = 1.0 - w2 - w3;
 
     w1 = std::max (0.0, std::min (1.0, w1));
     w2 = std::max (0.0, std::min (1.0, w2));
@@ -142,58 +104,6 @@ QTable::RecomputeSmoothEnergyWeights (double energyFraction)
     NS_LOG_DEBUG ("HSAQMAODV smooth weights: E=" << energyFraction
                   << " s=" << s
                   << " w=(" << w1 << "," << w2 << "," << w3 << ")");
-}
-
-// ============================================================================
-// Greedy selection — MODE_GREEDY (Contribution 1)
-// ============================================================================
-
-bool
-QTable::SelectGreedy (const saqmaodv::RoutingTableEntry& primary,
-                      saqmaodv::RoutingTableEntry&       out,
-                      const saqmaodv::RoutingTable*      mainTable) const
-{
-    ns3::Ipv4Address dst = primary.GetDestination ();
-
-    std::vector<saqmaodv::RoutingTableEntry> routes;
-    uint32_t n = GetRoutes (dst, routes, mainTable);
-
-    if (n == 0)
-    {
-        NS_LOG_DEBUG ("HSAQMAODV GREEDY: no Q-records for " << dst
-                      << " — falling back to primary");
-        out = primary;
-        return true;
-    }
-
-    double bestQ   = std::numeric_limits<double>::lowest ();
-    int    bestIdx = -1;
-    for (uint32_t i = 0; i < routes.size (); ++i)
-    {
-        // Safety: skip entries with null Ptr<Ipv4Route> — can cause
-        // AggregateObject(ptr, 0) crash when packet is forwarded.
-        if (!routes[i].GetRoute ())
-        {
-            NS_LOG_DEBUG ("HSAQMAODV GREEDY: skip null-route entry nh="
-                          << routes[i].GetNextHop ());
-            continue;
-        }
-        double q = GetQValue (dst, routes[i].GetNextHop ());
-        NS_LOG_DEBUG ("HSAQMAODV GREEDY candidate: nh=" << routes[i].GetNextHop ()
-                      << " Q=" << q);
-        if (q > bestQ) { bestQ = q; bestIdx = static_cast<int> (i); }
-    }
-
-    // Fall back to primary if no valid route found in Q-table
-    out = (bestIdx >= 0) ? routes[static_cast<size_t> (bestIdx)] : primary;
-    if (bestIdx >= 0 && !out.GetRoute ())
-    {
-        NS_LOG_DEBUG ("HSAQMAODV GREEDY: best route has null Ptr<Ipv4Route>, using primary");
-        out = primary;
-    }
-    NS_LOG_DEBUG ("HSAQMAODV GREEDY selected: nh=" << out.GetNextHop ()
-                  << " Q=" << bestQ);
-    return true;
 }
 
 // ============================================================================
@@ -215,24 +125,13 @@ QTable::SelectHybridRoute (const saqmaodv::RoutingTableEntry& primary,
     switch (mode)
     {
     case MODE_BYPASS:
-        // Topology too dynamic — skip Q-table, use primary route directly.
-        // This reduces exploration overhead and addresses high-variance at
-        // low density (Contribution 1, reviewer comment §3.1).
-        NS_LOG_DEBUG ("HSAQMAODV BYPASS → primary nh=" << primary.GetNextHop ());
         out = primary;
         return true;
 
     case MODE_GREEDY:
-        // Topology stable — exploit best Q-value.
-        // Implementation: epsilon-greedy with epsilon forced to 0 so it always
-        // picks the highest-Q candidate from BuildCandidates (which safely
-        // includes the primary route as a fallback).
-        // NOTE: Direct SelectGreedy() via GetRoutes() was removed because
-        // Q-table entries may have stale Ptr<Ipv4Route> not caught by
-        // GetRoutes()'s flag/lifetime filter, causing AggregateObject crash.
         {
+            // Exploit best Q-value: epsilon=0 greedy via epsilon-greedy
             double saved = GetEpsilon ();
-            // Temporarily set epsilon=0 for pure greedy exploitation
             SetLearningParameters (GetAlpha (), GetGamma (), 0.0);
             bool ok = SelectEpsilonGreedy (primary, out, mainTable);
             SetLearningParameters (GetAlpha (), GetGamma (), saved);
@@ -241,7 +140,6 @@ QTable::SelectHybridRoute (const saqmaodv::RoutingTableEntry& primary,
 
     case MODE_EXPLORE:
     default:
-        // Standard SA-QMAODV epsilon-greedy (base class).
         return SelectEpsilonGreedy (primary, out, mainTable);
     }
 }
