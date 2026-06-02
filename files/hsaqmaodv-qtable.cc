@@ -215,15 +215,33 @@ QTable::SelectHybridRoute (const saqmaodv::RoutingTableEntry& primary,
     switch (mode)
     {
     case MODE_BYPASS:
+        // Topology too dynamic — skip Q-table, use primary route directly.
+        // This reduces exploration overhead and addresses high-variance at
+        // low density (Contribution 1, reviewer comment §3.1).
         NS_LOG_DEBUG ("HSAQMAODV BYPASS → primary nh=" << primary.GetNextHop ());
         out = primary;
         return true;
 
     case MODE_GREEDY:
-        return SelectGreedy (primary, out, mainTable);
+        // Topology stable — exploit best Q-value.
+        // Implementation: epsilon-greedy with epsilon forced to 0 so it always
+        // picks the highest-Q candidate from BuildCandidates (which safely
+        // includes the primary route as a fallback).
+        // NOTE: Direct SelectGreedy() via GetRoutes() was removed because
+        // Q-table entries may have stale Ptr<Ipv4Route> not caught by
+        // GetRoutes()'s flag/lifetime filter, causing AggregateObject crash.
+        {
+            double saved = GetEpsilon ();
+            // Temporarily set epsilon=0 for pure greedy exploitation
+            SetLearningParameters (GetAlpha (), GetGamma (), 0.0);
+            bool ok = SelectEpsilonGreedy (primary, out, mainTable);
+            SetLearningParameters (GetAlpha (), GetGamma (), saved);
+            return ok;
+        }
 
     case MODE_EXPLORE:
     default:
+        // Standard SA-QMAODV epsilon-greedy (base class).
         return SelectEpsilonGreedy (primary, out, mainTable);
     }
 }
