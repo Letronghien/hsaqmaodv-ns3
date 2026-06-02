@@ -130,6 +130,11 @@ def patch_namespace(path: Path):
     text = re.sub(r'#include "saqmaodv-qtable\.h"',
                   '#include "hsaqmaodv-qtable.h"', text)
     text = re.sub(r'#include "saqmaodv-', '#include "hsaqmaodv-', text)
+    # Rename NS_LOG_COMPONENT_DEFINE strings to avoid duplicate registration.
+    # Both saqmaodv and hsaqmaodv modules are loaded at runtime; if they share
+    # the same log component name, NS-3 calls NS_FATAL at startup → crash.
+    text = re.sub(r'NS_LOG_COMPONENT_DEFINE\s*\(\s*"Saqmaodv',
+                  'NS_LOG_COMPONENT_DEFINE("Hsaqmaodv', text)
     # Rename class names (e.g. SaqmaodvHelper → HsaqmaodvHelper)
     # Only in helper files to avoid breaking base-class references in protocol
     if 'helper' in str(path):
