@@ -30,7 +30,7 @@
 #include "ns3/aomdv-module.h"
 #include "ns3/qmaodv-module.h"
 #include "ns3/saqmaodv-module.h"
-#include "ns3/hsaqmaodv-module.h"
+// NOTE: HSAQMAODV uses SaqmaodvHelper with UseHybrid=true (no separate module)
 
 #include <iostream>
 #include <fstream>
@@ -312,9 +312,11 @@ int main(int argc, char *argv[])
       saqmaodv.Set("PeriodicAdaptInterval", TimeValue(Seconds(saAdaptPeriod)));
       internet.SetRoutingHelper(saqmaodv);
     } else /* HSAQMAODV */ {
-      // H-SAQMAODV: inherits all SA parameters + adds TVI thresholds and
-      // sigmoid smooth energy weighting.
-      HsaqmaodvHelper hsaqmaodv;
+      // H-SAQMAODV: SaqmaodvHelper with UseHybrid=true
+      // Activates TVI 3-mode switching (Contribution 1) and sigmoid smooth
+      // energy weighting (Contribution 2) within the saqmaodv module.
+      // This avoids a separate NS-3 module and all associated linkage issues.
+      SaqmaodvHelper hsaqmaodv;
       hsaqmaodv.Set("MaxPaths",              UintegerValue(maxPaths));
       hsaqmaodv.Set("Alpha0",                DoubleValue(saAlpha0));
       hsaqmaodv.Set("Gamma",                 DoubleValue(saGamma));
@@ -324,13 +326,14 @@ int main(int argc, char *argv[])
       hsaqmaodv.Set("RewardW3",              DoubleValue(saW3));
       hsaqmaodv.Set("Lambda",                DoubleValue(saLambda));
       hsaqmaodv.Set("SeqNoWindow",           TimeValue(Seconds(saSeqNoWin)));
+      hsaqmaodv.Set("LowEnergyThreshold",    DoubleValue(saLowEThresh));
       hsaqmaodv.Set("PeriodicAdaptInterval", TimeValue(Seconds(saAdaptPeriod)));
-      // H-SAQMAODV specific: TVI thresholds (Contribution 1)
-      hsaqmaodv.Set("TVIHigh",              DoubleValue(hsTviHigh));
-      hsaqmaodv.Set("TVILow",               DoubleValue(hsTviLow));
-      // H-SAQMAODV specific: sigmoid smooth energy weights (Contribution 2)
-      hsaqmaodv.Set("SigmoidTheta",         DoubleValue(hsSigTheta));
-      hsaqmaodv.Set("SigmoidSigma",         DoubleValue(hsSigSigma));
+      // H-SAQMAODV contributions (Contribution 1 + 2)
+      hsaqmaodv.Set("UseHybrid",    BooleanValue(true));
+      hsaqmaodv.Set("TVIHigh",      DoubleValue(hsTviHigh));
+      hsaqmaodv.Set("TVILow",       DoubleValue(hsTviLow));
+      hsaqmaodv.Set("SigmoidTheta", DoubleValue(hsSigTheta));
+      hsaqmaodv.Set("SigmoidSigma", DoubleValue(hsSigSigma));
       internet.SetRoutingHelper(hsaqmaodv);
     }
     internet.Install(nodes);
