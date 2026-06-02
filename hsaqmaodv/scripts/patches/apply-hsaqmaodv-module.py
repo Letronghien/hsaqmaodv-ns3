@@ -194,22 +194,26 @@ build_lib(
 (DST_HS / 'CMakeLists.txt').write_text(cmake)
 info("  wrote CMakeLists.txt (links libsaqmaodv)")
 
-# ─── Step 7: Register in top-level CMakeLists.txt ────────────────────────────
+# ─── Step 7: Top-level CMakeLists.txt ────────────────────────────────────────
+# NS-3.40 auto-discovers ALL modules in src/ via subdirlist().
+# Adding add_subdirectory(src/hsaqmaodv) manually would DUPLICATE the entry
+# and cause: "The binary directory is already used to build a source directory"
+# → We do NOT touch top-level CMakeLists.txt. NS-3 finds hsaqmaodv automatically.
 top_cmake = NS3_DIR / 'CMakeLists.txt'
 if top_cmake.exists():
     content = top_cmake.read_text()
-    if 'src/hsaqmaodv' not in content:
-        if 'src/saqmaodv' in content:
-            content = content.replace(
-                'add_subdirectory(src/saqmaodv)',
-                'add_subdirectory(src/saqmaodv)\nadd_subdirectory(src/hsaqmaodv)'
-            )
-        else:
-            content += '\nadd_subdirectory(src/hsaqmaodv)\n'
+    # Safety: remove any previously added manual entry (from old script versions)
+    if 'add_subdirectory(src/hsaqmaodv)' in content:
+        content = content.replace(
+            'add_subdirectory(src/saqmaodv)\nadd_subdirectory(src/hsaqmaodv)',
+            'add_subdirectory(src/saqmaodv)'
+        )
+        content = content.replace('\nadd_subdirectory(src/hsaqmaodv)\n', '\n')
+        content = content.replace('add_subdirectory(src/hsaqmaodv)\n', '')
         top_cmake.write_text(content)
-        info("  patched top-level CMakeLists.txt")
+        info("  Removed manual add_subdirectory(src/hsaqmaodv) — NS-3.40 auto-discovers it")
     else:
-        info("  CMakeLists.txt already contains hsaqmaodv — skipped")
+        info("  top-level CMakeLists.txt unchanged (NS-3.40 auto-discovers src/hsaqmaodv)")
 
 print()
 print("✓  hsaqmaodv module created at:", DST_HS)
