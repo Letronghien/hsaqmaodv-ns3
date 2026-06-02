@@ -84,7 +84,19 @@ for rel in SA_SHARED:
     shutil.copy2(src, dst)
     info(f"  copied  {rel} → {dst.name}")
 
-# ─── Step 3: Copy H-SAQMAODV Q-table (the new contributions) ─────────────────
+# ─── Step 3a: Copy saqmaodv-qtable.h into hsaqmaodv/model/ ──────────────────
+# hsaqmaodv-qtable.h includes "saqmaodv-qtable.h" which is a custom file not
+# part of NS-3 stock. NS-3's build system does not always propagate custom
+# module include paths to dependent modules, so we copy it locally to ensure
+# the compiler finds it regardless of include path configuration.
+sa_qtable_h = SRC_SA / 'model' / 'saqmaodv-qtable.h'
+if sa_qtable_h.exists():
+    shutil.copy2(sa_qtable_h, DST_HS / 'model' / 'saqmaodv-qtable.h')
+    info("  copied  saqmaodv-qtable.h → hsaqmaodv/model/ (for local include resolution)")
+else:
+    info("WARNING: saqmaodv-qtable.h not found — hsaqmaodv build may fail")
+
+# ─── Step 3b: Copy H-SAQMAODV Q-table (the new contributions) ────────────────
 for fname in ['hsaqmaodv-qtable.h', 'hsaqmaodv-qtable.cc']:
     src = FILES_DIR / fname
     dst = DST_HS / 'model' / fname
