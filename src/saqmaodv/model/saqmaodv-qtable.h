@@ -146,7 +146,8 @@ class QTable
                       Ipv4Address nextHop,
                       double ackSuccess,
                       double delaySec,
-                      double energyFraction = 1.0);
+                      double energyFraction = 1.0,
+                double queueOccupancy = 0.0);
 
     bool EnsureRecord(const RoutingTableEntry& rt);
     void UpdateQValueOrCreate(const RoutingTableEntry& rt,
@@ -170,6 +171,9 @@ class QTable
   void   SetTVIHigh     (double v) { m_tviHigh = v; }
   void   SetTVILow      (double v) { m_tviLow  = v; }
   void   SetSigTheta    (double v) { m_sigTheta = v; }
+    void SetCongestionWeight(double w4) { m_w4 = w4; }
+    void SetHysteresisN(int n) { m_hysteresisN = n; }
+    void SetErrorWindow(Time w) { m_errorWindow = w; }
   void   SetSigSigma    (double v) { m_sigSigma = v; }
   double GetTVI         ()  const;
   bool   SelectHybridRoute (const RoutingTableEntry& primary,
@@ -183,7 +187,7 @@ class QTable
     std::vector<QRecord> BuildCandidates(const RoutingTableEntry& primary,
                                          const RoutingTable* mainTable) const;
     /// Compute the 3-term reward r_t.
-    double ComputeReward(double ackSuccess, double delaySec, double energyFrac) const;
+    double ComputeReward(double ackSuccess, double delaySec, double energyFrac, double queueOcc = 0.0) const;
     /// Prune SeqNo-update timestamps older than m_seqNoWindow.
     void PurgeSeqNoEvents();
 
@@ -218,9 +222,17 @@ class QTable
     // H-SAQMAODV hybrid members
     bool   m_useHybrid = false;
     double m_tviHigh   = 3.0;
-    double m_tviLow    = 1.0;
-    double m_sigTheta  = 0.30;
-    double m_sigSigma  = 0.08;
+    double m_tviLow{1.0};
+    double m_sigTheta{0.30};
+    double m_sigSigma{0.08};
+    double m_w4{0.1};
+    int    m_currentMode{1};
+    int    m_tickHigh{0};
+    int    m_tickLow{0};
+    int    m_hysteresisN{3};
+    Time   m_modeEnteredAt;
+    std::deque<Time> m_errorEvents;
+    Time   m_errorWindow{Seconds(10.0)};
 
 };
 

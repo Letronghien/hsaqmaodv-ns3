@@ -85,9 +85,18 @@ void QTable::SetSeqNoWindow(Time window) { m_seqNoWindow = window; }
 void
 QTable::OnRouteError()
 {
+    // Improvement 4: proportional bump based on recent error rate
+    m_errorEvents.push_back(Simulator::Now());
+    Time thresh = Simulator::Now() - m_errorWindow;
+    while (!m_errorEvents.empty() && m_errorEvents.front() < thresh)
+        m_errorEvents.pop_front();
+    double errRate = static_cast<double>(m_errorEvents.size()) /
+                     std::max(1.0, m_errorWindow.GetSeconds());
+    double bump = std::min(0.40, m_epsilonBump * (1.0 + errRate));
     double oldEps = m_epsilon;
-    m_epsilon = std::min(m_epsilonMax, m_epsilon + m_epsilonBump);
-    NS_LOG_DEBUG("SAQM ε bump on RERR: " << oldEps << " → " << m_epsilon);
+    m_epsilon = std::min(m_epsilonMax, m_epsilon + bump);
+    NS_LOG_DEBUG("SAQM ε proportional bump: rate=" << errRate
+                 << " bump=" << bump << " " << oldEps << "→" << m_epsilon);
 }
 
 void
@@ -156,12 +165,16 @@ QTable::RecomputeAdaptiveRewardWeights(double energyFraction)
 
 // Compute r_t = w₁·ACK + w₂·1/(delay+1) + w₃·Energy
 double
-QTable::ComputeReward(double ackSuccess, double delaySec, double energyFrac) const
+QTable::ComputeReward(double ackSuccess, double delaySec, double energyFrac, double queueOcc) const
 {
     if (delaySec < 0.0) delaySec = 0.0;
+    if (queueOcc < 0.0) queueOcc = 0.0;
+    if (queueOcc > 1.0) queueOcc = 1.0;
+    // Improvement 2: add congestion term w4*(1-queueOcc)
     double r = m_w1 * ackSuccess
              + m_w2 * (1.0 / (delaySec + 1.0))
-             + m_w3 * energyFrac;
+             + m_w3 * energyFrac
+             + m_w4 * (1.0 - queueOcc);
     return r;
 }
 
@@ -361,9 +374,11 @@ QTable::UpdateQValue(Ipv4Address dst,
                      Ipv4Address nextHop,
                      double ackSuccess,
                      double delaySec,
-                     double energyFraction)
+                     double energyFraction,
+                     double queueOccupancy)
 {
-    double reward = ComputeReward(ackSuccess, delaySec, energyFraction);
+    // Improvement 2: include queue occupancy in reward
+    double reward = ComputeReward(ackSuccess, delaySec, energyFraction, queueOccupancy);
 
     auto it = m_records.find(dst);
     if (it == m_records.end()) return;
@@ -392,7 +407,7 @@ QTable::UpdateQValueOrCreate(const RoutingTableEntry& rt,
 {
     EnsureRecord(rt);
     UpdateQValue(rt.GetDestination(), rt.GetNextHop(),
-                 ackSuccess, delaySec, energyFraction);
+                 ackSuccess, delaySec, energyFraction, 0.0);
 }
 
 void QTable::DeleteRoutes(Ipv4Address dst) { m_records.erase(dst); }
@@ -491,9 +506,32 @@ bool QTable::SelectHybridRoute(const RoutingTableEntry& primary,
                                const RoutingTable* mainTable) {
     if (!m_useHybrid) return SelectEpsilonGreedy(primary, out, mainTable);
     double tvi = GetTVI();
-    if (tvi > m_tviHigh) { out = primary; return true; }  // BYPASS
+    // Improvement 3: Hysteresis — update tick counters
+    if (tvi > m_tviHigh) { m_tickHigh++; m_tickLow = 0; }
+    else if (tvi < m_tviLow) { m_tickLow++; m_tickHigh = 0; }
+    else { m_tickHigh = 0; m_tickLow = 0; }
+
+    // Switch mode only after hysteresisN consecutive ticks in new region
+    if (m_tickHigh >= m_hysteresisN && m_currentMode != 2) {
+        m_currentMode = 2; // BYPASS
+        m_tickHigh = 0;
+    } else if (m_tickLow >= m_hysteresisN && m_currentMode != 0) {
+        m_currentMode = 0; // GREEDY
+        m_tickLow = 0;
+    } else if (m_tickHigh == 0 && m_tickLow == 0 && m_currentMode != 1) {
+        m_currentMode = 1; // EXPLORE
+    }
+
+    // Improvement 1: BYPASS — greedy (ε=0) on stable committed mode
+    if (m_currentMode == 2) {
+        double savedEps = m_epsilon;
+        m_epsilon = 0.0;
+        bool ok = SelectEpsilonGreedy(primary, out, mainTable);
+        m_epsilon = savedEps;
+        return ok;
+    }
     double savedEps = m_epsilon;
-    if (tvi < m_tviLow) m_epsilon = 0.0;                  // GREEDY
+    if (m_currentMode == 0) m_epsilon = 0.0; // GREEDY
     bool ok = SelectEpsilonGreedy(primary, out, mainTable);
     m_epsilon = savedEps;
     return ok;
