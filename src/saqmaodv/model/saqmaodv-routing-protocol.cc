@@ -565,6 +565,16 @@ RoutingProtocol::DeferredRouteOutput(Ptr<const Packet> p,
                                      UnicastForwardCallback ucb,
                                      ErrorCallback ecb)
 {
+    // Improvement 5: Only trigger void if Q-table already knows this dst
+    // (avoid firing on normal first-time route discovery)
+    {
+        RoutingTableEntry existingRt;
+        if (m_routingTable.LookupRoute(header.GetDestination(), existingRt)
+            && m_qtable.CountFor(header.GetDestination()) > 0)
+        {
+            m_qtable.OnVoidDetected();
+        }
+    }
     NS_LOG_FUNCTION(this << p << header);
     NS_ASSERT(p && p != Ptr<Packet>());
 
@@ -773,6 +783,8 @@ RoutingProtocol::Forwarding(Ptr<const Packet> p,
             m_nb.Update(route->GetGateway(), m_activeRouteTimeout);
             m_nb.Update(toOrigin.GetNextHop(), m_activeRouteTimeout);
 
+        // Improvement 6: AODV-assisted dual Q-update
+        { double eFrac = GetEnergyFraction(); m_qtable.UpdateFromAODVRoute(toDst, toDst.GetHop(), eFrac); }
             ucb(route, p, header);
             return true;
         }
@@ -2485,6 +2497,16 @@ RoutingProtocol::GetEnergyFraction() const
 void
 RoutingProtocol::PeriodicAdaptiveTick()
 {
+    // Improvement 7: Adaptive hello interval based on TVI
+    {
+        double tvi = m_qtable.GetTVI();
+        if (tvi > m_qtable.GetTVIHigh())
+            m_helloInterval = Seconds(0.5);   // fast — topology very dynamic
+        else if (tvi < m_qtable.GetTVILow())
+            m_helloInterval = Seconds(2.0);   // slow — stable, save energy
+        else
+            m_helloInterval = Seconds(1.0);
+    }
   // (1) Periodic ε decay (§4.2)
   m_qtable.PeriodicEpsilonDecay();
   // (2) Recompute α_t from Δ_Seq (§4.3)

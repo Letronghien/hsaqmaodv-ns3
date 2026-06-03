@@ -174,6 +174,15 @@ class QTable
     void SetCongestionWeight(double w4) { m_w4 = w4; }
     void SetHysteresisN(int n) { m_hysteresisN = n; }
     void SetErrorWindow(Time w) { m_errorWindow = w; }
+    // Improvement 5: Void detection
+    void OnVoidDetected();
+    void SetVoidEpsBump(double v) { m_voidEpsBump = v; }
+    // Improvement 6: AODV-assisted dual Q-update
+    void UpdateFromAODVRoute(const RoutingTableEntry& rt,
+                             uint32_t hopCount, double energyFrac);
+    // Improvement 7: Adaptive hello — expose TVI thresholds
+    double GetTVIHigh() const { return m_tviHigh; }
+    double GetTVILow()  const { return m_tviLow; }
   void   SetSigSigma    (double v) { m_sigSigma = v; }
   double GetTVI         ()  const;
   bool   SelectHybridRoute (const RoutingTableEntry& primary,
@@ -226,6 +235,8 @@ class QTable
     double m_sigTheta{0.30};
     double m_sigSigma{0.08};
     double m_w4{0.1};
+    // Improvement 5: void bump strength
+    double m_voidEpsBump{0.35};
     int    m_currentMode{1};
     int    m_tickHigh{0};
     int    m_tickLow{0};

@@ -107,6 +107,43 @@ QTable::PeriodicEpsilonDecay()
     NS_LOG_DEBUG("SAQM ε decayed: " << oldEps << " → " << m_epsilon);
 }
 
+// ── Improvement 5: Void Region Detection ────────────────────────────────
+void
+QTable::OnVoidDetected()
+{
+    // Strong ε bump to aggressively explore new paths
+    m_errorEvents.push_back(Simulator::Now());
+    Time thresh = Simulator::Now() - m_errorWindow;
+    while (!m_errorEvents.empty() && m_errorEvents.front() < thresh)
+        m_errorEvents.pop_front();
+    double bump = std::min(0.45, m_voidEpsBump * 1.5);
+    m_epsilon = std::min(m_epsilonMax, m_epsilon + bump);
+    // Force EXPLORE mode — override hysteresis
+    m_currentMode = 1;
+    m_tickHigh = 0;
+    m_tickLow  = 0;
+    NS_LOG_DEBUG("SAQM VOID detected: ε→" << m_epsilon << " mode→EXPLORE");
+}
+
+// ── Improvement 6: AODV-assisted Dual Q-update ───────────────────────────
+void
+QTable::UpdateFromAODVRoute(const RoutingTableEntry& rt,
+                            uint32_t hopCount, double energyFrac)
+{
+    if (hopCount == 0) return;
+    // Estimate delay from hop count (5ms per hop)
+    double estDelay = static_cast<double>(hopCount) * 0.005;
+    // Use half alpha for AODV-assisted samples — softer update
+    // to not overwrite learned Q-values aggressively
+    double savedAlpha = m_alpha;
+    m_alpha = std::max(0.05, m_alpha * 0.5);
+    UpdateQValueOrCreate(rt, 1.0, estDelay, energyFrac);
+    m_alpha = savedAlpha;
+    NS_LOG_DEBUG("SAQM AODV dual-update: dst=" << rt.GetDestination()
+                 << " via=" << rt.GetNextHop()
+                 << " HC=" << hopCount);
+}
+
 // §4.3 — Adaptive Learning Rate
 void
 QTable::RecordSeqNoUpdate()
