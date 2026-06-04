@@ -38,8 +38,8 @@ SA_LAMBDA=0.01; SA_WINDOW=10;  SA_PERIOD=1.0;   SA_LOWE=0.20
 SA_W1=0.5;      SA_W2=0.4;     SA_W3=0.1
 
 # H-SAQMAODV default thresholds (tuned from TVI family)
-HS_TVI_HIGH="${HS_TVI_HIGH:-8}"
-HS_TVI_LOW="${HS_TVI_LOW:-1}"
+HS_TVI_HIGH="${HS_TVI_HIGH:-5}"
+HS_TVI_LOW="${HS_TVI_LOW:-2}"
 
 # -------- Results dir -------------------------------------------------------
 TS=$(date +%Y%m%d-%H%M%S)
@@ -63,7 +63,7 @@ echo "======================================================" | tee -a "$LOG"
 # Format: "PROTO maxPaths"
 PROTOCOLS=(
     "AODV       1"
-    "AOMDV      3"
+    "PMAODV     3"
     "QMAODV     3"
     "SAQMAODV   3"
     "HSAQMAODV  3"
@@ -93,7 +93,7 @@ if echo "$FAMILIES" | grep -qw TVI; then
         for TVL in 0 1 2; do
             [ $TVL -ge $TVH ] && continue
             for SEED in $(seq 1 "$SEEDS"); do
-                echo "TVI HSAQMAODV 3 $SEED numNodes=15 simTime=200 speed=20 tviHigh=$TVH tviLow=$TVL" >> "$JOB_FILE"
+                echo "TVI HSAQMAODV 3 $SEED numNodes=15 simTime=200 speed=20 tviHigh=$TVH tviLow=$TVL scenarioTag=TVI-N15-V20-T200-E0-H${TVH}-L${TVL}" >> "$JOB_FILE"
                 # Also run SAQMAODV baseline for comparison at same seed
                 echo "TVI SAQMAODV  3 $SEED numNodes=15 simTime=200 speed=20 tviHigh=0  tviLow=0" >> "$JOB_FILE"
             done
@@ -177,6 +177,7 @@ run_job() {
     [[ "$PROTO" != "AODV" ]] && LABEL="${PROTO}-${MP}"
 
     local SCENARIO="${FAMILY}-N${NUM_NODES}-V${SPEED}-T${SIM_TIME}-E${E0}"
+    [[ "$FAMILY" == "TVI" ]] && SCENARIO="${SCENARIO}-H${TVI_HIGH}-L${TVI_LOW}"
     local CSV="$JOB_DIR/job-${FAMILY}-${LABEL}-N${NUM_NODES}-V${SPEED}-E${E0}-seed${SEED}.csv"
     local START=$(date +%s)
 
@@ -262,7 +263,7 @@ for r in rows:
     agg[(fam, label)].append(pdr)
 
 families = sorted({k[0] for k in agg})
-protos   = ["AODV","AOMDV-3","QMAODV-3","SAQMAODV-3","HSAQMAODV-3"]
+    protos   = ["AODV","PMAODV-3","QMAODV-3","SAQMAODV-3","HSAQMAODV-3"]
 
 print()
 print("=" * 65)
@@ -275,7 +276,7 @@ for fam in families:
     for p in protos:
         v = agg.get((fam, p), [])
         if v:
-            print(f"  {p:<18} {sum(v)/len(v):>9.2%} {len(v):>5}")
+            print(f"  {p:<18} {sum(v)/len(v)/100:>9.2%} {len(v):>5}")
 PYEOF
 fi
 

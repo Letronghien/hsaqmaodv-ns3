@@ -46,6 +46,7 @@ plt.rcParams.update({
 # Protocol display config
 PROTO_STYLE = {
     'AODV':         {'color': '#555555', 'marker': 's', 'ls': '-',  'lw': 1.5, 'label': 'AODV'},
+    'PMAODV-3':     {'color': '#8E44AD', 'marker': 'v', 'ls': '--', 'lw': 1.5, 'label': 'PMAODV-3'},
     'AOMDV-3':      {'color': '#E67E22', 'marker': '^', 'ls': '--', 'lw': 1.5, 'label': 'AOMDV-3'},
     'QMAODV-3':     {'color': '#2980B9', 'marker': 'o', 'ls': '--', 'lw': 1.5, 'label': 'QMAODV-3'},
     'SAQMAODV-3':   {'color': '#27AE60', 'marker': 'D', 'ls': '-.',  'lw': 1.5, 'label': 'SA-QMAODV-3'},
@@ -123,8 +124,14 @@ def plot_tvi_heatmap(rows, outdir):
         if label_of(r.get('protocol',''), r.get('maxPaths','1')) != 'HSAQMAODV-3':
             continue
         try:
-            tvh = float(r.get('tviHigh', r.get('hsTviHigh', 0)))
-            tvl = float(r.get('tviLow',  r.get('hsTviLow',  0)))
+            sc = r.get('scenario', '')
+            import re as _re
+            mh = _re.search(r"-H(\d+)", sc)
+            ml = _re.search(r"-L(\d+)", sc)
+            if not mh or not ml:
+                continue
+            tvh = float(mh.group(1))
+            tvl = float(ml.group(1))
             pdr = float(r['deliveryRatio'])
         except (KeyError, ValueError):
             continue
@@ -144,8 +151,8 @@ def plot_tvi_heatmap(rows, outdir):
                 matrix[i, j] = np.mean(vs)
 
     fig, ax = plt.subplots(figsize=(6, 4))
-    im = ax.imshow(matrix * 100, aspect='auto', cmap='RdYlGn',
-                   vmin=np.nanmin(matrix)*100-2, vmax=np.nanmax(matrix)*100+2)
+    im = ax.imshow(matrix, aspect='auto', cmap='RdYlGn',
+                   vmin=np.nanmin(matrix)-2, vmax=np.nanmax(matrix)+2)
     ax.set_xticks(range(len(tvh_vals)))
     ax.set_xticklabels([int(v) for v in tvh_vals])
     ax.set_yticks(range(len(tvl_vals)))
@@ -160,7 +167,7 @@ def plot_tvi_heatmap(rows, outdir):
         for j in range(len(tvh_vals)):
             v = matrix[i, j]
             if not np.isnan(v):
-                ax.text(j, i, f'{v*100:.1f}', ha='center', va='center',
+                ax.text(j, i, f'{v:.1f}', ha='center', va='center',
                         fontsize=8, color='black')
 
     # Mark best
@@ -189,8 +196,8 @@ def plot_line(agg_data, x_vals, x_label, title, figname, outdir, x_log=False):
             if key in agg_data:
                 mean, std, _ = agg_data[key]
                 xs.append(x)
-                ys.append(mean * 100)
-                errs.append(std * 100)
+                ys.append(mean)
+                errs.append(std)
         if not xs:
             continue
         ax.errorbar(xs, ys, yerr=errs,
