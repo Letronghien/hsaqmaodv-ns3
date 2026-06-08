@@ -228,7 +228,18 @@ export HS_TVI_HIGH HS_TVI_LOW
 
 # -------- Run ---------------------------------------------------------------
 START_TS=$(date +%s)
-cat "$JOB_FILE" | xargs -P "$JOBS" -L 1 bash -c 'run_job "$@"' _ | tee -a "$LOG"
+# Chia jobs theo family để tránh VM đơ
+# Chạy từng family riêng với số jobs phù hợp (tránh VM đơ)
+for FAM_RUN in TVI E L N S; do
+    grep "^$FAM_RUN " "$JOB_FILE" > /tmp/jobs_fam.txt || continue
+    case "$FAM_RUN" in
+        TVI|E) MAX_J=6 ;;
+        L)     MAX_J=4 ;;
+        N|S)   MAX_J=3 ;;
+    esac
+    echo "[Family $FAM_RUN] $(wc -l < /tmp/jobs_fam.txt) jobs, parallel=$MAX_J" | tee -a "$LOG"
+    cat /tmp/jobs_fam.txt | xargs -P "$MAX_J" -L 1 bash -c 'run_job "$@"' _ | tee -a "$LOG"
+done
 END_TS=$(date +%s)
 WALL=$(( END_TS - START_TS ))
 
