@@ -1,81 +1,69 @@
-# H-SAQMAODV — Topology-Aware Hybrid Self-Adaptive Q-Learning Multipath AODV
+# H-SAQMAODV: Hybrid Self-Adaptive Q-learning Multipath AODV
 
-[![NS-3](https://img.shields.io/badge/NS--3-3.40-blue)](https://www.nsnam.org/)
-[![Status](https://img.shields.io/badge/status-in--development-yellow)]()
-[![Based on](https://img.shields.io/badge/extends-SA--QMAODV-green)]()
+**NS-3.40 implementation** | FANET routing protocol | Q3 journal submission
 
-## Tóm tắt
+## Overview
 
-**H-SAQMAODV** (Hybrid Self-Adaptive Q-learning Multipath AODV) mở rộng SA-QMAODV bằng cơ chế
-**Topology-Aware Q-Switching**: giao thức tự phát hiện trạng thái topology mạng và quyết định khi nào
-dùng Q-learning, khi nào fallback về routing tất định — giải quyết điểm yếu cốt lõi của SA-QMAODV
-khi mật độ UAV cao hoặc topology thay đổi quá nhanh.
+H-SAQMAODV extends SA-QMAODV with:
+1. **TVI mode switching** — 3-mode (BYPASS/EXPLORE/GREEDY) based on Topology Volatility Index
+2. **Sigmoid transition smoothing** — prevents oscillatory mode toggling
+3. **Congestion-aware reward** — penalizes queue-saturated forwarding paths
+4. **AODV-assisted dual Q-update** — supporting mechanism for route recovery
 
-### Cải tiến so với SA-QMAODV
+**Recommended deployment:** N=15–30 nodes, V=20–100 m/s (high-mobility FANET)
 
-| Thành phần | SA-QMAODV | H-SAQMAODV |
-|---|---|---|
-| Route selection | ε-greedy luôn active | **3-mode switching** theo ΔSeq |
-| High-dynamic response | Exploration làm tăng loss | **Bypass Q → dùng primary route** |
-| Stable network | Vẫn explore không cần thiết | **Pure greedy (ε→0)** |
-| Medium dynamic | ε-greedy bình thường | ε-greedy bình thường |
-
-### 3-Mode Topology-Aware Switching (đóng góp mới)
+## Repository Structure
 
 ```
-ΔSeq > ThreshHigh  →  MODE_BYPASS:  dùng primary route trực tiếp (AODV-like)
-ΔSeq < ThreshLow   →  MODE_GREEDY:  chọn route có Q-value cao nhất (ε=0)
-ThreshLow ≤ ΔSeq ≤ ThreshHigh → MODE_EXPLORE: ε-greedy bình thường
+paper/          ← Paper generator (gen-paper-hsaqmaodv.js) + final docx
+scripts/
+  run/          ← Simulation run scripts
+  plot/         ← Figure generation (matplotlib)
+  patch/        ← NS-3 source patch scripts
+results/
+  *.csv         ← Simulation data (EXP-5b, EXP-9)
+  figures/      ← Generated figures
+hsaqmaodv-src/  ← NS-3 module source + fanet-sim.cc
+notes/          ← Project notes, session logs
 ```
 
-### Cảm hứng từ
-
-- **HQA** (Hybrid Q-learning and AODV, ScienceDirect 2025): Bayesian stability evaluator
-  → H-SAQMAODV dùng ΔSeq (đã có sẵn trong SA framework) thay vì Bayesian riêng biệt
-
----
-
-## Cấu trúc project
-
-```
-paper1-hsaqmaodv/
-├── README.md                        # File này
-├── PAPER-OUTLINE.md                 # Cấu trúc bài báo
-├── files/
-│   ├── hsaqmaodv-qtable.h           # Extended QTable với 3-mode switching
-│   └── hsaqmaodv-qtable.cc          # Implementation
-├── scripts/
-│   ├── patches/
-│   │   └── apply-hsaqmaodv-*.py     # Patches để wire vào NS-3
-│   ├── run/
-│   │   └── run-paper1-experiments.sh
-│   └── plot/
-│       └── plot-paper1.py
-└── notes/
-    └── implementation-guide.md      # Hướng dẫn implement từng bước
-```
-
-## Base project
-
-Kế thừa từ: `../` (saqmaodv-ns3) — dùng lại toàn bộ setup, patches AODV/AOMDV/PMAODV/QMAODV.
-Chỉ thêm module `hsaqmaodv` thay thế `saqmaodv`.
-
-## Setup
+## Quick Start
 
 ```bash
-# Sau khi đã setup saqmaodv-ns3 thành công:
-cd paper1-hsaqmaodv
-bash scripts/patches/apply-hsaqmaodv-all.sh
-# Build lại NS-3
-cd $NS3_DIR && ./ns3 build
+# 1. Build
+cd ~/ns-allinone-3.40-hsaqmaodv/ns-3.40
+./ns3 build scratch/fanet-sim
+
+# 2. Run EXP-5b (high-speed ablation)
+bash scripts/run/run_ablation_highspeed.sh test   # 4 jobs to verify
+bash scripts/run/run_ablation_highspeed.sh full   # 240 jobs
+
+# 3. Run EXP-9 (sparse FANET)
+bash scripts/run/run_sparse_dualq.sh test
+bash scripts/run/run_sparse_dualq.sh full
+
+# 4. Plot
+python3 scripts/plot/plot_exp5b.py
+python3 scripts/plot/hsa_plot_exp9.py
+
+# 5. Rebuild paper
+cd paper && node gen-paper-hsaqmaodv.js
 ```
 
-## Experiments
+## Key Results
 
-```bash
-bash scripts/run/run-paper1-experiments.sh
-```
+| Metric | H-SAQMAODV vs AODV |
+|--------|-------------------|
+| Delay at V=50 m/s | -12% |
+| Routing overhead | Comparable |
+| PDR at N=15-30 | Competitive |
+| TVI threshold sensitivity | Robust (15 combos tested) |
 
-## Target venue
+## Operating Regime
 
-IEEE/ACM conference on wireless networks / FANET — 2026
+| Condition | Recommendation |
+|-----------|---------------|
+| N≥15, V=20-100 m/s | H-SAQMAODV (primary range) |
+| N=10-14 | H-SAQMAODV or SA-QMAODV |
+| N<10 | AODV or P-MAODV |
+| N≥40 | Protocol-agnostic (MAC saturation) |
